@@ -1,0 +1,25 @@
+/*
+ * Legacy webOS compatibility.
+ *
+ * Flex `gap` shipped in Chromium 84, so webOS 5 (Chromium 68) and webOS 6 (79)
+ * ignore it. The flex-`gap` fallback below is GENERATED at build time from the
+ * source CSS (generateGapFallback in esbuild.config.mjs) and appended here: for
+ * each flex container that sets `gap`, a `> * + *` margin on the main axis
+ * (column -> margin-top, row -> margin-left), wrapped in `@supports not (inset: 0)`.
+ * `inset` is Chromium 87, so the margins apply on webOS 5/6 and are skipped on
+ * webOS 22+ (87) where native gap works. This file used to hand-maintain that
+ * list, but it drifted out of sync with the source; generating from source removes
+ * that drift. Only the hand-written backdrop-filter fallback below lives here
+ * permanently.
+ *
+ * `backdrop-filter` shipped in Chromium 76, so webOS 5 (68) ignores it and falls
+ * back to the rgba background. The existing alphas (0.75–0.92) stay readable, but
+ * we make the panels fully opaque on webOS 5 for safety. webOS 6 (79) supports
+ * backdrop-filter, so it isn't covered here.
+ */
+
+@supports not (backdrop-filter: blur(1px)) {
+  .player-sidebar { background: rgb(20, 20, 35); }
+  .player-menu,
+  .player-osd { background: rgb(10, 10, 15); }
+}

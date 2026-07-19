@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.ipk
+.DS_Store
+
+# Test artifacts
+test-output/
+
+# Built JS service for the IPK
+build/

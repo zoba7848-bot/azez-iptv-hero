@@ -1,0 +1,78 @@
+name: Build IPK
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install webOS CLI
+        run: npm install -g @webos-tools/cli@3.2.3
+
+      - name: Type check
+        run: npx tsc --noEmit && npx tsc -p bundled-service/tsconfig.json
+
+      - name: Lint (webOS 5 / Chromium 68 compat gate)
+        run: npm run lint
+
+      - name: Unit tests
+        run: npx vitest run
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E tests
+        run: npx playwright test
+
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-artifacts
+          path: test-output/
+          retention-days: 7
+
+      - name: Bundle
+        run: node esbuild.config.mjs
+
+      - name: Build service
+        run: |
+          rm -rf build/bundled-service
+          npx tsc -p bundled-service/tsconfig.json
+          cp bundled-service/package.json build/bundled-service/
+          cp bundled-service/src/services.json build/bundled-service/
+          cp bundled-service/src/upload/upload-page.html build/bundled-service/upload/
+
+      - name: Package IPK
+        run: ares-package --no-minify -e "*preview-libs.js" dist build/bundled-service -o .
+
+      - name: Upload IPK
+        uses: actions/upload-artifact@v7
+        with:
+          name: webos-iptv-player-ipk
+          path: '*.ipk'
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: '*.ipk'

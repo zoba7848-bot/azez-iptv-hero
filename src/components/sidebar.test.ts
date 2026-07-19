@@ -1,0 +1,369 @@
+// @vitest-environment jsdom
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { Channel } from '../types';
+import { CONFIG } from '../config';
+
+const { channels } = vi.hoisted(() => {
+  function makeChannel(over: Partial<Channel>): Channel {
+    return {
+      id: '', name: '', logo: '', group: '', url: '', extras: null,
+      playlistIds: [], catchup: '', catchupSource: '', catchupDays: 0, ...over,
+    };
+  }
+  return {
+    channels: [
+      makeChannel({ id: 'a', name: 'Alpha', playlistIds: ['PL1'] }),
+      makeChannel({ id: 'b', name: 'Bravo', playlistIds: ['PL1'] }),
+      makeChannel({ id: 'c', name: 'Charlie', playlistIds: ['PL2'] }),
+    ] as Channel[],
+  };
+});
+
+vi.mock('../services/playlist-service', () => ({
+  PlaylistService: {
+    channels,
+    playlistTabs: [{ id: 'PL1', name: 'PL1' }, { id: 'PL2', name: 'PL2' }],
+    getByIndex: (i: number) => channels[i],
+  },
+}));
+
+vi.mock('../services/epg-service', () => ({
+  EpgService: {
+    findChannelId: () => null,
+    getNowPlaying: () => null,
+  },
+}));
+
+import { Sidebar } from './sidebar';
+
+let container: HTMLElement;
+let el: HTMLElement;
+let getCurrentIndex: ReturnType<typeof vi.fn>;
+let onSelect: ReturnType<typeof vi.fn>;
+let sidebar: Sidebar;
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  // jsdom has no layout
+  Element.prototype.scrollIntoView = vi.fn();
+
+  container = document.createElement('div');
+  el = document.createElement('div');
+  el.id = 'player-sidebar';
+  el.className = 'player-sidebar hidden';
+  container.appendChild(el);
+  document.body.appendChild(container);
+
+  getCurrentIndex = vi.fn(() => 1);
+  onSelect = vi.fn();
+  sidebar = new Sidebar(container, getCurrentIndex, onSelect);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  document.body.innerHTML = '';
+});
+
+function items(): HTMLElement[] {
+  return Array.from(el.querySelectorAll<HTMLElement>('.sidebar-ch-item'));
+}
+
+describe('Sidebar', () => {
+  describe('show / hide', () => {
+    it('highlights the search box on open without taking the caret', () => {
+      sidebar.show();
+      expect(sidebar.visible).toBe(true);
+      expect(items()).toHaveLength(3);
+      const search = el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
+      expect(search.classList.contains('focused')).toBe(true);
+      expect(items().some(i => i.classList.contains('focused'))).toBe(false);
+      expect(document.activeElement).not.toBe(search); // no caret until OK
+      expect(el.classList.contains('hidden')).toBe(false);
+      expect(el.classList.contains('visible')).toBe(true);
+    });
+
+    it('OK on the highlighted search box gives it the caret at the end', () => {
+      const search = () => el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
+      sidebar.show();
+      sidebar.handleAction('select'); // OK on the search box
+      search().value = 'char';
+      search().dispatchEvent(new Event('input', { bubbles: true }));
+      sidebar.hide();
+      sidebar.show();
+      // Reopen highlights but does not grab the caret; OK does, at the end.
+      expect(document.activeElement).not.toBe(search());
+      sidebar.handleAction('select');
+      const s = search();
+      expect(s.value).toBe('char');
+      expect(document.activeElement).toBe(s);
+      expect(s.selectionStart).toBe(s.value.length);
+      expect(items().map(i => i.querySelector('.ch-name')?.textContent)).toEqual(['Charlie']);
+    });
+
+    it('hide() removes the visible class and reports not visible', () => {
+      sidebar.show();
+      sidebar.hide();
+      expect(sidebar.visible).toBe(false);
+      expect(el.classList.contains('visible')).toBe(false);
+    });
+
+    it('show() is idempotent', () => {
+      sidebar.show();
+      const first = items()[1];
+      sidebar.show();
+      expect(items()[1]).toBe(first);
+    });
+  });
+
+  describe('handleAction', () => {
+    // Opens highlighting the search box; Down enters the list at the first channel.
+    beforeEach(() => {
+      sidebar.show();
+      sidebar.handleAction('down');
+    });
+
+    it('enters the list at the top channel', () => {
+      expect(items()[0].classList.contains('focused')).toBe(true);
+    });
+
+    it('down then up moves the focus highlight', () => {
+      sidebar.handleAction('down'); // 0 -> 1
+      expect(items()[1].classList.contains('focused')).toBe(true);
+      sidebar.handleAction('up'); // 1 -> 0
+      expect(items()[0].classList.contains('focused')).toBe(true);
+    });
+
+    it('channel_up / channel_down behave like up / down', () => {
+      sidebar.handleAction('channel_down'); // 0 -> 1
+      expect(items()[1].classList.contains('focused')).toBe(true);
+      sidebar.handleAction('channel_up'); // 1 -> 0
+      expect(items()[0].classList.contains('focused')).toBe(true);
+    });
+
+    it('clamps at the bottom end', () => {
+      sidebar.handleAction('down'); // 0 -> 1
+      sidebar.handleAction('down'); // 1 -> 2 (last)
+      sidebar.handleAction('down'); // stays 2
+      expect(items()[2].classList.contains('focused')).toBe(true);
+    });
+
+    it('up from the top channel highlights the search box (no caret)', () => {
+      const search = el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
+      sidebar.handleAction('up'); // from 0 -> search box
+      expect(items().some(i => i.classList.contains('focused'))).toBe(false);
+      expect(search.classList.contains('focused')).toBe(true);
+      expect(document.activeElement).not.toBe(search);
+    });
+
+    it('typing in the search box filters channels across playlists', () => {
+      const search = el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
+      search.value = 'char';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      const names = items().map(i => i.querySelector('.ch-name')?.textContent);
+      expect(names).toEqual(['Charlie']);
+    });
+
+    it('Enter in the search box drops focus onto the first result', () => {
+      const search = el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
+      search.value = 'a';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      expect(items()[0].classList.contains('focused')).toBe(true);
+    });
+
+    it('select fires onSelectChannel with the global index and hides', () => {
+      sidebar.handleAction('down'); // 0 -> 1
+      sidebar.handleAction('down'); // 1 -> 2 (global 2)
+      sidebar.handleAction('select');
+      expect(onSelect).toHaveBeenCalledWith(2);
+      expect(sidebar.visible).toBe(false);
+    });
+  });
+
+  // Regression guard: the global key handler routes the remote Back key through
+  // even from inputs, so the search box must stop propagation on the keys it
+  // owns. Otherwise Back would both exit the search box (here) and bubble up to
+  // the global handler, closing the whole sidebar / acting on the player.
+  describe('search box key propagation', () => {
+    function pressInSearch(init: KeyboardEventInit): ReturnType<typeof vi.fn> {
+      sidebar.show();
+      const globalSpy = vi.fn();
+      document.addEventListener('keydown', globalSpy);
+      el.querySelector<HTMLInputElement>('.sidebar-search-input')!
+        .dispatchEvent(new KeyboardEvent('keydown', { ...init, bubbles: true, cancelable: true }));
+      document.removeEventListener('keydown', globalSpy);
+      return globalSpy;
+    }
+
+    it.each([
+      ['Back', { keyCode: CONFIG.KEYS.BACK }],
+      ['Escape', { key: 'Escape' }],
+      ['Enter', { key: 'Enter' }],
+      ['ArrowDown', { key: 'ArrowDown' }],
+    ] as [string, KeyboardEventInit][])('stops %s from reaching the global handler', (_name, init) => {
+      expect(pressInSearch(init)).not.toHaveBeenCalled();
+    });
+
+    it('lets an unhandled key (typing) reach the global handler', () => {
+      expect(pressInSearch({ key: 'a' })).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('pointer interaction', () => {
+    beforeEach(() => sidebar.show());
+
+    it('clicking a channel item selects it', () => {
+      items()[2].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(onSelect).toHaveBeenCalledWith(2);
+    });
+
+    it('clicking a playlist tab filters the list and resets focus', () => {
+      const tab = el.querySelector<HTMLElement>('[data-sidebar-playlist="PL2"]')!;
+      tab.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      // Only Charlie belongs to PL2, retaining its global index of 2
+      expect(items()).toHaveLength(1);
+      expect(items()[0].dataset.sidebarIndex).toBe('2');
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it('hovering an item moves the focus highlight', () => {
+      items()[2].dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      expect(items()[2].classList.contains('focused')).toBe(true);
+    });
+
+    it('hovering up onto the search box highlights it and clears the channel', () => {
+      items()[1].dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      expect(items()[1].classList.contains('focused')).toBe(true);
+      const search = el.querySelector<HTMLElement>('.sidebar-search-input')!;
+      search.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      expect(items().some(i => i.classList.contains('focused'))).toBe(false);
+      expect(search.classList.contains('focused')).toBe(true);
+    });
+
+    it('clears the highlight when the cursor leaves the sidebar', () => {
+      items()[2].dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      expect(items()[2].classList.contains('focused')).toBe(true);
+      el.dispatchEvent(new MouseEvent('mouseleave'));
+      expect(el.querySelectorAll('.focused')).toHaveLength(0);
+    });
+
+    it('re-shows the highlight when the cursor returns to the same row', () => {
+      items()[2].dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      el.dispatchEvent(new MouseEvent('mouseleave'));
+      items()[2].dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); // same row
+      expect(items()[2].classList.contains('focused')).toBe(true);
+    });
+
+    it('hover only re-highlights when the position changes', () => {
+      const spy = vi.spyOn(sidebar as unknown as { updateFocus: () => void }, 'updateFocus');
+      const row = items()[1];
+      row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      expect(spy).toHaveBeenCalledTimes(1);
+      // Sweeping across a child of the same row must not re-run updateFocus.
+      row.querySelector('.ch-name')!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      expect(spy).toHaveBeenCalledTimes(1);
+      // A different row does.
+      items()[2].dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      expect(spy).toHaveBeenCalledTimes(2);
+    });
+
+    it('wheel down / up moves the focus highlight', () => {
+      // Opens on the search box (focusIdx -1); first wheel-down enters the list.
+      el.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
+      expect(items()[0].classList.contains('focused')).toBe(true);
+      el.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
+      expect(items()[1].classList.contains('focused')).toBe(true);
+      el.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true }));
+      expect(items()[0].classList.contains('focused')).toBe(true);
+    });
+
+    it('does not stack listeners across re-renders (single select per click)', () => {
+      sidebar.hide();
+      sidebar.show(); // re-render #2
+      sidebar.hide();
+      sidebar.show(); // re-render #3
+      items()[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(onSelect).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('auto-hide timer', () => {
+    it('hides itself after the idle timeout', () => {
+      sidebar.show();
+      vi.advanceTimersByTime(5000);
+      expect(sidebar.visible).toBe(false);
+    });
+
+    // Keyboard on → never auto-hide, wherever the mouse is.
+    it('stays open while the keyboard is on (OK pressed)', () => {
+      sidebar.show();
+      sidebar.handleAction('select'); // OK → keyboard on
+      expect(sidebar.keyboardOn).toBe(true);
+      vi.advanceTimersByTime(5000);
+      expect(sidebar.visible).toBe(true);
+    });
+
+    // Also holds when the box is focused by a pointer click (not just OK):
+    // the global click handler skips the sidebar, so focusin is what flips it on.
+    it('stays open when the search box is focused by pointer (keyboard on)', () => {
+      sidebar.show();
+      el.querySelector<HTMLInputElement>('.sidebar-search-input')!.focus();
+      expect(sidebar.keyboardOn).toBe(true);
+      vi.advanceTimersByTime(5000);
+      expect(sidebar.visible).toBe(true);
+    });
+
+    // Cancel/Back → keyboard off → hide (pointer not over the sidebar).
+    it('Cancel (Escape) on the search box turns the keyboard off and hides', () => {
+      sidebar.show();
+      sidebar.handleAction('select');
+      el.querySelector<HTMLInputElement>('.sidebar-search-input')!
+        .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      expect(sidebar.keyboardOn).toBe(false);
+      expect(sidebar.visible).toBe(false);
+    });
+
+    it('Back on the search box turns the keyboard off and hides', () => {
+      sidebar.show();
+      sidebar.handleAction('select');
+      el.querySelector<HTMLInputElement>('.sidebar-search-input')!
+        .dispatchEvent(new KeyboardEvent('keydown', { keyCode: CONFIG.KEYS.BACK, bubbles: true }));
+      expect(sidebar.visible).toBe(false);
+    });
+
+    // The real webOS fix: keyboard dismissed while the input keeps the caret.
+    it('hides on keyboardStateChange:false even if the box keeps focus', () => {
+      sidebar.show();
+      sidebar.handleAction('select'); // focus → keyboard on
+      expect(sidebar.keyboardOn).toBe(true);
+      // webOS dismiss: keyboard off, but the input is NOT blurred (caret stays).
+      document.dispatchEvent(new CustomEvent('keyboardStateChange', { detail: { visibility: false } }));
+      expect(sidebar.keyboardOn).toBe(false);
+      expect(sidebar.visible).toBe(false);
+    });
+
+    it('Down moves into the list (keyboard off) without hiding', () => {
+      sidebar.show();
+      sidebar.handleAction('select'); // keyboard on
+      el.querySelector<HTMLInputElement>('.sidebar-search-input')!
+        .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      expect(sidebar.keyboardOn).toBe(false);
+      expect(sidebar.visible).toBe(true);
+      expect(items()[0].classList.contains('focused')).toBe(true);
+    });
+  });
+
+  describe('search ranking', () => {
+    it('a search result reports its global channel index, not the filtered position', () => {
+      sidebar.show();
+      sidebar.handleAction('select'); // focus the search box
+      const search = el.querySelector<HTMLInputElement>('.sidebar-search-input')!;
+      search.value = 'charlie';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      expect(items().map(i => i.querySelector('.ch-name')?.textContent)).toEqual(['Charlie']);
+      sidebar.handleAction('down');   // enter the list at the single result
+      sidebar.handleAction('select'); // pick it
+      expect(onSelect).toHaveBeenCalledWith(2); // Charlie is global index 2, not filtered 0
+    });
+  });
+});

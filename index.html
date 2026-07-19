@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1920, height=1080, initial-scale=1.0">
+  <title>webOS IPTV Player</title>
+  <link rel="stylesheet" href="css/main.css">
+  <link rel="stylesheet" href="css/navigation.css">
+  <link rel="stylesheet" href="css/channel-list.css">
+  <link rel="stylesheet" href="css/player.css">
+  <link rel="stylesheet" href="css/epg.css">
+  <link rel="stylesheet" href="css/settings.css">
+  <link rel="stylesheet" href="css/tab-bar.css">
+  <link rel="stylesheet" href="css/search.css">
+  <link rel="stylesheet" href="css/catalog-view.css">
+  <link rel="stylesheet" href="css/account-switcher.css">
+  <link rel="stylesheet" href="css/legacy-webos.css">
+</head>
+<body>
+  <video id="video-player" autoplay></video>
+
+  <div id="view-loading" class="view">
+    <div class="loading-container">
+      <div class="loading-spinner"></div>
+      <div id="loading-text" class="loading-text">Loading...</div>
+    </div>
+  </div>
+
+  <div id="view-channels" class="view hidden"></div>
+
+  <div id="view-player" class="view hidden">
+    <div id="player-sidebar" class="player-sidebar hidden"></div>
+    <div id="player-menu" class="player-menu hidden"></div>
+    <div id="player-osd" class="player-osd hidden"></div>
+    <div id="subtitle-search" class="hidden"></div>
+    <div id="subtitle-offset" class="hidden"></div>
+  </div>
+
+  <div id="view-epg" class="view hidden"></div>
+
+  <div id="view-settings" class="view hidden"></div>
+
+  <div id="view-movies" class="view hidden"></div>
+  <div id="view-series" class="view hidden"></div>
+  <div id="view-search" class="view hidden"></div>
+
+  <script>
+    if (/webOS|Web0S/i.test(navigator.userAgent)) {
+      // Load webOS system library for Luna Service access
+      document.write('<script src="webOSjs/webOS.js"><\/script>');
+    } else {
+      // Load hls.js + mpegts.js only on desktop (not needed on webOS)
+      document.write('<script src="js/preview-libs.js"><\/script>');
+    }
+  </script>
+  <script src="js/app.js"></script>
+</body>
+</html>
